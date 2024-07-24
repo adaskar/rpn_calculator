@@ -2,6 +2,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+	
+#if defined(_WIN32) || defined(_WIN64)
+#define strtok_r strtok_s
+#endif
 
 #define bail_assert(s)          \
     do {                        \
