@@ -36,7 +36,7 @@ typedef struct _stack
 {
     int index;
     size_t size;
-    int *data;
+    mfloat *data;
 } stack, *stackp;
 
 stackp stack_create(void)
@@ -48,7 +48,7 @@ stackp stack_create(void)
     
     sp->index = -1;
     sp->size = STACK_GROW;
-    sp->data = (int *)sp + sizeof(*sp);
+    sp->data = (mfloat *)((char *)sp + sizeof(*sp));
     return sp;
     
 exit:
@@ -58,46 +58,46 @@ exit:
     return NULL;
 }
 
-int stack_push(stackp sp, int data)
+int stack_push(stackp sp, mfloat val)
 {
     int ret = 1;
 
     bail_assert_wm(sp, "arg: sp");
 
-    if (sp->index + sizeof(void *) >= sp->size) {
-        void *t;
-
-        t = realloc(sp, sp->size + STACK_GROW);
+    if (sp->index + 1 >= (int)(sp->size / sizeof(mfloat))) {
+        void *t = realloc(sp, sizeof(stack) + sp->size + STACK_GROW);
         bail_assert_wm(t, "memory allocation");
 
         sp = t;
+        sp->size += STACK_GROW;
+        sp->data = (mfloat *)((char *)sp + sizeof(*sp));
     }
 
-    sp->data[++sp->index] = data;
+    sp->data[++sp->index] = val;
     ret = 0;
 
 exit:
     return ret;
 }
 
-bool stack_pop(stackp sp, int *data)
+bool stack_pop(stackp sp, mfloat *val)
 {
     bail_assert_wm(sp, "arg: sp");
     bail_assert_wm(sp->index > -1, "arg: sp->index > -1");
 
-    *data = sp->data[sp->index--];
+    *val = sp->data[sp->index--];
     return true;
 
 exit:
     return false;
 }
 
-bool stack_peek(stackp sp, int *data)
+bool stack_peek(stackp sp, mfloat *val)
 {
     bail_assert_wm(sp, "arg: sp");
     bail_assert(sp->index > -1);
 
-    *data = sp->data[sp->index];
+    *val = sp->data[sp->index];
     return true;
 
 exit:
@@ -140,7 +140,7 @@ char rpn_bmp[] =
     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 #define rpn_is_ok(op) \
     (rpn_bmp[op & 0xFF] != 0x00)
 #define rpn_is_op(op) \
@@ -204,16 +204,12 @@ char *rpn_infix2postfix(const char *infix)
     char *ppostfix = NULL;
     const char *pinfix = NULL;
 
-    int op;
+    mfloat op;
 
     sp = stack_create();
     bail_assert(sp);
 
-    // ATT
-    // * 8
-    // we are putting integers as floats .2f, so,
-    printf("rpn_count_token: %zu\n", rpn_count_token(infix));
-    postfix = calloc(1, rpn_count_token(infix) * 8);
+    postfix = calloc(1, rpn_count_token(infix) * 16);
     bail_assert_wm(postfix, "memory allocation");
 
     for (pinfix = infix, ppostfix = postfix; *pinfix; ++pinfix) {
@@ -221,7 +217,9 @@ char *rpn_infix2postfix(const char *infix)
             continue;
         }
 
-        bail_assert_wm(rpn_is_ok(*infix), "parse error. char: %c hex: %X at %d\n", *pinfix, *pinfix, (int)(pinfix - infix));
+        bail_assert_wm(rpn_is_ok(*pinfix),
+                       "parse error. char: %c hex: %X at %d\n",
+                       *pinfix, *pinfix, (int)(pinfix - infix));
         
         if (!rpn_is_op(*pinfix)) {
             pinfix = rpn_parse_number(pinfix, &number);
@@ -231,22 +229,33 @@ char *rpn_infix2postfix(const char *infix)
             continue;
         }
 
-        if (rpn_need_push(*pinfix)) {
-            stack_push(sp, *pinfix);
+        if (rpn_is_parent_o(*pinfix)) {
+            op.ivalue = *pinfix;
+            stack_push(sp, op);
+            continue;
+        }
+
+        if (rpn_is_parent_c(*pinfix)) {
+            while (stack_peek(sp, &op) && !rpn_is_parent_o(op.ivalue)) {
+                stack_pop(sp, &op);
+                ppostfix += sprintf(ppostfix, "%c ", op.ivalue);
+            }
+            stack_pop(sp, &op); // pop '('
             continue;
         }
 
         while ( stack_peek(sp, &op) &&
-                rpn_bmp[op] >= rpn_bmp[*pinfix]) {
+                rpn_bmp[op.ivalue] >= rpn_bmp[*pinfix]) {
             stack_pop(sp, &op);
-            ppostfix += sprintf(ppostfix, "%c ", op);
+            ppostfix += sprintf(ppostfix, "%c ", op.ivalue);
         }
-        stack_push(sp, *pinfix);
+        op.ivalue = *pinfix;
+        stack_push(sp, op);
     }
 
     while (stack_count(sp) > 0) {
         stack_pop(sp, &op);
-        ppostfix += sprintf(ppostfix, "%c ", op);
+        ppostfix += sprintf(ppostfix, "%c ", op.ivalue);
     }
 
     ret = postfix;
@@ -265,9 +274,7 @@ exit:
 
 mfloat rpn_calculate(char *postfix)
 {
-    mfloat ret = {
-        .fvalue = -1
-    };
+    mfloat ret = { .fvalue = -1 };
     stackp sp = NULL;
     char *token = NULL;
     char *rest = postfix;
@@ -284,9 +291,8 @@ mfloat rpn_calculate(char *postfix)
     while ((token = strtok_r(rest, " ", &rest))) {
         if (!rpn_is_op(*token)) {
             mfloat mf;
-
             mf.fvalue = (float)atof(token);
-            stack_push(sp, mf.ivalue);
+            stack_push(sp, mf);
             continue;
         }
         if (rpn_is_parent_o(*token)) {
@@ -299,30 +305,29 @@ mfloat rpn_calculate(char *postfix)
         }
         bail_assert_wm(stack_count(sp) > 1, "calculation error. token %c\n", *token);
 
-        stack_pop(sp, &(val1.ivalue));
-        stack_pop(sp, &(val0.ivalue));
-        printf("%c %.2f %.2f\n", *token, val0.fvalue, val1.fvalue);
+        stack_pop(sp, &val1);
+        stack_pop(sp, &val0);
         switch (*token)
         {
         case '+':
             val.fvalue = val0.fvalue + val1.fvalue;
-            stack_push(sp, val.ivalue);
+            stack_push(sp, val);
             break;
         case '-':
             val.fvalue = val0.fvalue - val1.fvalue;
-            stack_push(sp, val.ivalue);
+            stack_push(sp, val);
             break;
         case '*':
             val.fvalue = val0.fvalue * val1.fvalue;
-            stack_push(sp, val.ivalue);
+            stack_push(sp, val);
             break;
         case '/':
             val.fvalue = val0.fvalue / val1.fvalue;
-            stack_push(sp, val.ivalue);
+            stack_push(sp, val);
             break;
         case '^':
             val.fvalue = pow(val0.fvalue, val1.fvalue);
-            stack_push(sp, val.ivalue);
+            stack_push(sp, val);
             break;
         
         default:
@@ -332,7 +337,7 @@ mfloat rpn_calculate(char *postfix)
 
     bail_assert_wm(parentheses == 0, "parentheses should be 0\n");
     bail_assert_wm(stack_count(sp) == 1, "calculation error. stack size %d\n", stack_count(sp));
-    stack_pop(sp, &ret.ivalue);
+    stack_pop(sp, &ret);
 
 exit:
     if (sp) {
