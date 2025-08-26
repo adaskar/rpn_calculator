@@ -351,7 +351,7 @@ int main(int argc, char *argv[])
     mfloat result;
     char *postfix;
 
-    bail_assert_wm(argc > 1, "argv error");
+    bail_assert_wm(argc > 1, "argv error.");
 
     postfix = rpn_infix2postfix(argv[1]);
     printf("postfix: %s\n", postfix);
